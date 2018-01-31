@@ -1,0 +1,32 @@
+{
+  "data_path": "../../DATA/MASS/",
+  "output_path": "clustering/test/",
+  "vae_loc": "vae_logs/test/conv/",
+  "nfft": 1024,
+  "ham_win": 62,
+  "f_crop": [7,42],
+  "scale_factors": [1,3],
+  "netFilename": "vae_model.h5",
+  "gpu_id": "2,3,4,5,6,7",
+  "TB": true,
+  "n_ex": -1,
+  "batch_size": 32,
+  "val_split": 0.2,
+  "n_epochs": 100,
+  "n_eval": 5,
+  "train": true,
+  "intermediate_dim": 256,
+  "latent_dim": 25,
+  "epsilon_std": 1.0,
+  "init_lr": 0.0001,
+  "n_filters": 64,
+  "n_conv": 3,
+  "original_dim": [299,299,3],
+
+  "signal_files": [
+  "01-02-0001.edf"],
+
+  "spindle_annotations": [
+  ["annotations/SpindleE1/01-02-0001 SpindleE1.edf","annotations/SpindleE2/01-02-0001 SpindleE2.edf"]]
+
+}
