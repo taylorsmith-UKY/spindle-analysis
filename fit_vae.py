@@ -29,8 +29,9 @@ n_epochs=conf['n_epochs']
 vae_type=conf['vae_type']
 orig_dim=conf['original_dim']
 batch_size=conf['batch_size']
+spindleFilename=conf['spindleFilename']
 
-dataFile = output_path + 'spindles.h5'
+dataFile = output_path + spindleFilename
 vae_name = vae_loc + netFilename
 
 os.environ["CUDA_VISIBLE_DEVICES"]=gpu_id
@@ -46,7 +47,10 @@ elif vae_type[:4].lower() == 'conv':
 rds = HDF5Matrix(dataFile,ds_name)
 
 if os.path.exists(vae_name):
-    vae = load_model(vae_name, custom_objects={'latent_dim': latent_dim, 'epsln_std': epsln_std, 'vae_loss': vae_loss})
+    if vae_type[:4].lower() == 'trad':
+        vae = load_model(vae_name, custom_objects={'latent_dim': latent_dim, 'epsln_std': epsln_std, 'vae_loss': vae_loss})
+    elif vae_type[:4].lower() == 'conv':
+        vae = load_model(vae_name, custom_objects={'latent_dim': latent_dim, 'epsln_std': epsln_std, 'cvae_loss': vae_loss})
     vae_name = vae_name.split('.')[0]+'_copy.h5'
 
 model_checkpoint = ModelCheckpoint(vae_name, monitor='loss',verbose=1, save_best_only=True)
