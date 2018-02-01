@@ -17,6 +17,7 @@
   "train": true,
   "intermediate_dim": 256,
   "latent_dim": 25,
+  "vae_type": "conv",
   "epsilon_std": 1.0,
   "init_lr": 0.0001,
   "n_filters": 64,
