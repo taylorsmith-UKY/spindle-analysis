@@ -32,10 +32,10 @@ latent_dim=conf['latent_dim']
 epsln_std=conf['epsilon_std']
 
 for df in detfiles:
-	for i in range(len(df)):
-		df[i]=data_path+df[i]
+    for i in range(len(df)):
+        df[i]=data_path+df[i]
 for i in range(len(sigfiles)):
-	sigfiles[i]=data_path+sigfiles[i]
+    sigfiles[i]=data_path+sigfiles[i]
 
 dataFile = output_path + 'spindles.h5'
 spec_name = 'spectrograms_'+str(f_crop[0])+'-'+str(f_crop[1])
@@ -51,9 +51,9 @@ def main():
         os.makedirs(vae_loc)
     try:
         f = h5py.File(dataFile,'r+')
-        spindles=f['spindles']
+        windows=f['windows']
     except:
-        spindles=ppf.get_spindles(sigfiles,detfiles,dataFile)
+        windows=ppf.get_windows(sigfiles,detfiles,dataFile)
     try:
         flat=f[spec_name+'_rsz_norm_concat_flat']
     except:
@@ -69,7 +69,7 @@ def main():
                     try:
                         specs=f[spec_name]
                     except:
-                        specs=ppf.fft_fe(spindles,nfft,ham_win,f_crop,spec_name)
+                        specs=ppf.fft_fe(windows,nfft,ham_win,f_crop,spec_name)
                     rsz = ppf.resize_specs(specs,scale_factors)
                 norm=ppf.normalize(rsz)
             concat = ppf.concat_specs(norm)
@@ -78,7 +78,7 @@ def main():
     ppf.spindle_stats(specs)
     os.environ["CUDA_VISIBLE_DEVICES"]=gpu_id
     ds = f[ds_name]
-    vae = sae.train_vae(ds,dataFile,ds_name,vae_name,n_epochs=n_epochs,val_split=val_split)
+    #vae = sae.train_vae(ds,dataFile,ds_name,vae_name,n_epochs=n_epochs,val_split=val_split)
     sae.save_ex(vae,ds,n_eval,vae_loc)
     encoded = sae.encode_data(vae,ds)
     f.create_dataset('encoded_'+str(latent_dim),data=encoded)

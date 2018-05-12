@@ -21,26 +21,29 @@ import matplotlib.pyplot as plt
 from matplotlib import gridspec
 import json
 import h5py
+from scipy.stats import entropy
+from sklearn.metrics import normalized_mutual_info_score as nmis
 
 f=open('conf.json','r')
 conf=json.load(f)
 f.close()
 
-#------------------------------- PARAMETERS -----------------------------------#
-#Convolutional VAE
+# ------------------------------- PARAMETERS ----------------------------------- #
+# Convolutional VAE
 filters = conf['n_filters']
 n_conv = conf['n_conv']
 
-#Variational AE
+# Variational AE
 original_dim = np.product(conf['original_dim'])
 intermediate_dim = conf['intermediate_dim']
 latent_dim = conf['latent_dim']
 init_lr = conf['init_lr']
 epsln_std = conf['epsilon_std']
 batch_size = conf['batch_size']
-#------------------------------------------------------------------------------#
+# ------------------------------------------------------------------------------ #
 
-#%%         Standard Variational AE
+
+# Standard Variational AE
 # Custom loss layer
 def sampling(args):
         z_mean, z_log_var = args
@@ -54,7 +57,7 @@ def get_vae(in_shape):
     z_mean = Dense(latent_dim,name='z_mean')(h)
     z_log_var = Dense(latent_dim,name='z_std')(h)
 
-    z = Lambda(sampling,name='sampling')([z_mean,z_log_var])
+    z = Lambda(sampling,name='sampling')([z_mean, z_log_var])
 
     # we instantiate these layers separately so as to reuse them later
     decoder_h = Dense(intermediate_dim, activation='relu',name='decoder_1')
@@ -62,11 +65,9 @@ def get_vae(in_shape):
     h_decoded = decoder_h(z)
     x_decoded_mean = decoder_mean(h_decoded)
 
-    vae = Model(inputs,x_decoded_mean)
-
+    vae = Model(inputs, x_decoded_mean)
 
     def vae_loss(x, x_decoded_mean):
-
         xent_loss = np.prod(original_dim) * metrics.mse(K.flatten(x), K.flatten(x_decoded_mean))
         kl_loss = - 0.5 * K.sum(1 + z_log_var - K.square(z_mean) - K.exp(z_log_var), axis=-1)
         return K.mean(xent_loss + kl_loss)
@@ -76,8 +77,7 @@ def get_vae(in_shape):
     return vae, vae_loss
 
 
-
-#%% Convolutional AE
+# Convolutional AE
 def get_conv_vae(in_shape):
     img_rows, img_cols, img_chns = in_shape
     x = Input(in_shape)
@@ -93,7 +93,7 @@ def get_conv_vae(in_shape):
 #                    padding='same', activation='relu',
 #                    strides=1)(conv_2)
     conv_4 = Conv2D(filters,
-                    kernel_size=n_conv,
+                    kernel_size=(n_conv, n_conv),
                     padding='same', activation='relu',
                     strides=(2, 2))(conv_2)
     enc_dim = int(conv_4.shape[1])
@@ -116,7 +116,7 @@ def get_conv_vae(in_shape):
 
     decoder_reshape = Reshape(output_shape[1:])
     decoder_deconv_1_upsamp = Conv2DTranspose(filters,
-                                       kernel_size=n_conv,
+                                       kernel_size=(2, 2),
                                        padding='same',
                                        strides=(2,2),
                                        activation='relu')
@@ -127,12 +127,12 @@ def get_conv_vae(in_shape):
     #                                   activation='relu')
 
     decoder_deconv_3_upsamp = Conv2DTranspose(filters,
-                                              kernel_size=(3, 3),
+                                              kernel_size=(2, 2),
                                               strides=(2, 2),
                                               padding='valid',
                                               activation='relu')
     decoder_mean_squash = Conv2D(img_chns,
-                                 kernel_size=(3,3),
+                                 kernel_size=(3, 3),
                                  padding='valid',
                                  activation='sigmoid')
 
@@ -175,7 +175,6 @@ def save_ex(vae_name,ds,n_eval,log_loc,tar_name='vae_eval.tar.gz'):
     else:
         vae = load_model(vae_name, custom_objects={'latent_dim': latent_dim, 'epsln_std': epsln_std, 'vae_loss': vae_loss})
 
-    test = []
     test = np.sort(random.sample(range(tot_ex),n_eval))
 
     test_img = []
@@ -242,14 +241,16 @@ def print_mat(f,mat,sep=','):
     return
 
 def vae_vis(data_path):
-    x = read_csv(data_path+'orig.csv',3,299)
-    x_p = read_csv(data_path+'recon.csv',3,299)
+    x = read_csv(data_path+'orig.csv', 3, 116)
+    x_p = read_csv(data_path+'recon.csv', 3, 116)
     f=open(data_path+'latent.csv')
     enc = []
     for l in f:
         if len(l.split(',')) > 1:
             enc.append(np.array(l.rstrip().split(','),dtype=float))
-    #enc = read_csv(data_path+'latent.csv')
+    for i in range(len(enc)):
+        enc[i] = np.array(enc[i])
+    # enc = read_csv(data_path+'latent.csv')
     n_eval = x.shape[0]
     for i in range(n_eval):
         fig = plt.figure(figsize=(3,8))
@@ -266,7 +267,7 @@ def vae_vis(data_path):
         ax2.set_xticks([])
         ax2.set_yticks([])
         ax3 = plt.subplot(gs[4])
-        plt.pcolormesh([enc[i],enc[i]])
+        plt.pcolormesh(np.vstack((enc[i],enc[i])))
         plt.title('Latent Representation')
         ax3.set_xticks([])
         ax3.set_yticks([])
@@ -344,6 +345,34 @@ def encode_data(model,data,batch_size=32,layer_name='z_mean'):
     enc = intermediate_model.predict(data, batch_size=batch_size)
     return enc
 
+def reconstruct(model,in_data,batch_size=32):
+    f=in_data.parent
+    in_name = in_data.name
+    rec_name = in_name + '_recon'
+    ds = f.create_dataset(rec_name,shape=in_data.shape)
+    nex = in_data.shape[0]
+    for i in range(0,nex,batch_size):
+        try:
+            ds[i:i+batch_size,:,:,:] = model.predict(in_data[i:i+batch_size,:,:,:])
+        except:
+            ds[i:,:,:,:] = model.predict(in_data[i:,:,:,:])
+    return ds
+
+def kl_divergence(ds1,ds2):
+    nex = ds1.shape[0]
+    f = ds1.parent
+    ds = f.create_dataset('kl_divergence',shape=(nex,))
+    for i in range(nex):
+        ds[i] = entropy(ds1[i].flatten(),ds2[i].flatten())
+    return ds
+
+def mutual_info(ds1,ds2):
+    nex = ds1.shape[0]
+    f = ds1.parent
+    ds = f.create_dataset('mutual_info',shape=(nex,))
+    for i in range(nex):
+        ds[i] = nmis(ds1[i].flatten(),ds2[i].flatten())
+    return ds
 
 #%%         U-Net
 class Conv_Layer():

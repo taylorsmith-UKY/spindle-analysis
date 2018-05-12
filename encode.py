@@ -43,7 +43,7 @@ if vae_type[:4].lower() == 'trad':
     vae = load_model(vae_name, custom_objects={'latent_dim': latent_dim, 'epsln_std': epsln_std, 'vae_loss': vae_loss})
 elif vae_type[:4].lower() == 'conv':
     enc_name = 'c'+enc_name
-    ds_name = 'spectrograms_'+str(f_crop[0])+'-'+str(f_crop[1])+'_rsz_norm_concat'
+    ds_name = 'spectrograms_bp_8-17_norm_square_concat'
     _,vae_loss = get_conv_vae(orig_dim)
     vae = load_model(vae_name, custom_objects={'latent_dim': latent_dim, 'epsln_std': epsln_std, 'cvae_loss': vae_loss})
 
