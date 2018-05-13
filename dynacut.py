@@ -123,6 +123,9 @@ def bench_methods(data, nbClusters, methods, fname=''):
     d = pdist(data)
     if fname != '':
         f = open(fname, 'w')
+    dyn_costs = np.zeros(len(methods))
+    cut_costs = np.zeros(len(methods))
+    ct = 0
     for method in methods:
         if method in ['centroid', 'ward', 'median']:
             linkage_matrix = linkage(data, method)
@@ -145,5 +148,9 @@ def bench_methods(data, nbClusters, methods, fname=''):
         else:
             f.write("method: %s\n" % method)
             f.write("intra-variance: (DP): %.4f,\t(cst height)%.4f\n\n" % (tot_dyn, tot_cut))
+        dyn_costs[ct] = tot_dyn
+        cut_costs[ct] = tot_cut
+        ct += 1
     if fname != '':
         f.close()
+    return dyn_costs, cut_costs
