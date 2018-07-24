@@ -10,6 +10,8 @@ import numpy as np
 import fastcluster as fc
 from scipy.cluster.hierarchy import dendrogram, fcluster, ward
 from scipy.spatial.distance import pdist, euclidean, squareform
+from scipy.stats.mstats import normaltest
+from scipy.stats import ttest_ind
 from dtw import dtw
 from sklearn.metrics import silhouette_samples
 import os
@@ -261,55 +263,77 @@ def inter_intra_dist(indm, clusters, op='max', out_path='', plot='both'):
     return sqdm, all_inter, all_intra
 
 
-def ward_breakdown(inputs, lbls, bkdn_num, base_name, output_base_path, metric='euclidean', parents=[], lbl_list=[]):
+def ward_breakdown(inputs, lbls, freq, dur, loc, bkdn_num, p_thresh=1e-3, metric='euclidean', min_size=15):
     sel = np.where(lbls == bkdn_num)[0]
+    if len(sel) < min_size:
+        return lbls
     ds = inputs[sel]
-    condensed = pdist(ds, metric=metric)
-    cgrp_name = base_name + '_ward'
-    outpath = output_base_path + 'ward' + str(bkdn_num) + '/'
-    os.makedirs(outpath)
+    tfreq = freq[sel]
+    tdur = dur[sel]
+    tloc = loc[sel]
 
+    print(method)
+    if method == 'normal':
+        _, p_f = normaltest(tfreq)
+        _, p_d = normaltest(tdur)
+        _, p_l = normaltest(tloc)
+        print('%s, %s, %s' % (str(p_f), str(p_d), str(p_l)))
+        if np.all(np.array((p_f, p_d, p_l)) < p_thresh):
+            return lbls
+
+    max_id = np.max(lbls)
+
+    condensed = pdist(ds, metric=metric)
 
     link = ward(condensed)
-    plt.close('all')
-    dendrogram(link, 50, truncate_mode='lastp')
-    plt.show()
-    thresh = float(raw_input('Enter color threshold: '))
-    plt.close('all')
-    dendrogram(link, 50, truncate_mode='lastp', color_threshold=thresh)
-    plt.title(cgrp_name+'\nWard\'s Method')
-    plt.savefig(outpath+'/dendrogram.png')
-    plt.show()
 
-    cont = 1
-    while cont:
-        nclust = input('How many clusters to generate: ')
-        nlbls = fcluster(link, nclust, criterion='maxclust')
-        clust_name = str(nclust)+'_clusters'
-        plt.close('all')
-        eval_clusters(ds, nlbls, op='max', plot='nosave')
-        ctext = raw_input('Try different number of clusters? ')
-        if ctext.lower()[0] == 'n':
-            cont = 0
+    nlbls = fcluster(link, 2, criterion='maxclust')
+    sel1 = np.where(nlbls == 1)[0]
+    sel2 = np.where(nlbls == 2)[0]
 
-    np.savetxt(outpath + str(nclust) + '_clusters.txt', nlbls, fmt='%d')
-    os.makedirs(outpath + '/max_dist/')
-    plt.close('all')
-    eval_clusters(ds, nlbls, fig_path=outpath + '/max_dist/', op='max', plot='both')
+    if len(sel1) < min_size or len(sel2) < min_size:
+        return lbls
 
-    ctext = raw_input('Cluster IDs to break-down(id separated by comma (no space); N/n to quit): ')
-    lbl_list.append((parents, lbls))
-    if ctext.lower()[0] == 'n':
-        return lbl_list
-    if len(ctext) == 1:
-        bkdn_nums = np.array((int(ctext),))
-    else:
-        bkdn_nums = np.array(ctext.split(','), dtype=int)
-    for i in range(len(bkdn_nums)):
-        base_temp = base_name + '_ward' + str(bkdn_nums[i])
-        lbl_list = ward_breakdown(ds, nlbls, bkdn_nums[i], base_temp, outpath,
-                                  metric=metric, parents=parents + [bkdn_nums[i], ], lbl_list=lbl_list)
-    return lbl_list
+    freq1 = tfreq[sel1]
+    dur1 = tdur[sel1]
+    loc1 = tloc[sel1]
+
+    freq2 = tfreq[sel2]
+    dur2 = tdur[sel2]
+    loc2 = tloc[sel2]
+
+    if method == 'normal':
+        lbls[sel1] = max_id + 1
+        lbls[sel2] = max_id + 2
+        max_id += 2
+        if len(sel1) > 20:
+            _, p_f = normaltest(freq1)
+            _, p_d = normaltest(dur1)
+            _, p_l = normaltest(loc1)
+            if np.any(np.array((p_f, p_d, p_l)) > p_thresh):
+                print('Split Node: %d to [%d, %d]' % (max_id - 1, max_id))
+                lbls = ward_breakdown(inputs, lbls, freq, dur, loc, max_id - 1, p_thresh, metric, method, min_size)
+
+        if len(sel2) > 20:
+            _, p_f = normaltest(freq2)
+            _, p_d = normaltest(dur2)
+            _, p_l = normaltest(loc2)
+            if np.any(np.array((p_f, p_d, p_l)) > p_thresh):
+                lbls = ward_breakdown(inputs, lbls, freq, dur, loc, max_id, p_thresh, metric, method, min_size)
+    elif method == 'significant':
+        _, p_f = ttest_ind(freq1, freq2)
+        _, p_d = ttest_ind(dur1, dur2)
+        _, p_l = ttest_ind(loc1, loc2)
+        # print('%s, %s, %s' % (str(p_f), str(p_d), str(p_l)))
+        if np.any(np.array((p_f, p_d, p_l)) < p_thresh):
+            print('Split Node: %d to [%d, %d]' % (bkdn_num, max_id + 1, max_id + 2))
+            lbls[sel[sel1]] = max_id + 1
+            lbls[sel[sel2]] = max_id + 2
+            max_id += 2
+            lbls = ward_breakdown(inputs, lbls, freq, dur, loc, max_id - 1, p_thresh, metric, method, min_size)
+            lbls = ward_breakdown(inputs, lbls, freq, dur, loc, max_id, p_thresh, metric, method, min_size)
+
+    return lbls
 
 
 def pairwise_dtw_dist(ds, metric=euclidean):
