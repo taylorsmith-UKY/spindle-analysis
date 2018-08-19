@@ -11,6 +11,7 @@ import matplotlib as mpl
 from scipy.signal import butter, lfilter
 import scipy.ndimage as ndi
 from scipy.signal import argrelextrema as rel_extrema
+from tqdm import tqdm
 
 ch_names = np.array(['Fp1-A2', 'Fp2-A2', 'F7-A2', 'F3-A2', 'Fpz-A2', 'F4-A2', 'F8-A2', 'T3-A2', 'C3-A2', 'Cz-A2',
                      'C4-A2', 'T4-A2', 'T5-A2', 'P3-A2', 'Pz-A2', 'P4-A2', 'T6-A2', 'O1-A2', 'O2-A2'])
@@ -136,156 +137,390 @@ def get_spindles(sigfiles, detfiles, fname='spindles.h5', lbl_type='intersect'):
     return final
 
 
-def extract_windows_seeg(sigfiles, chan_list, win_dur=4.0, ovlp=0.5, fname='data.h5'):
-    try:
-        f = h5py.File(fname, 'r+')
-    except:
-        f = h5py.File(fname, 'w')
+def extract_seeg_data(edf_files, params, base_path=''):
+    channel_names = params['channel_list']
+    if not os.path.exists(base_path):
+        os.mkdir(base_path)
 
-    for sigfile in sigfiles:
-        pt_name = sigfile.split('/')[-1].split('.')[0]
-        pt_grp = f.create_group(pt_name)
-
-        in_file = pyedflib.EdfReader(sigfile)
-        channel_names = in_file.getSignalLabels()
-        eeg_channels_idx = [i for i in range(len(channel_names)) if 'EEG' in channel_names[i]]
-        n_chan = len(channel_names)
-
-        eeg_channel_names = [channel_names[x] for x in eeg_channels_idx]
-        chan_idx = np.zeros(len(chan_list), dtype=int)
-        for i in range(len(channel_names)):
-            chan_idx[i] = eeg_channels_idx[np.where([channel_names[i] in x for x in eeg_channel_names])[0]]
-
-        fs = in_file.getSampleFrequency(eeg_channels_idx[0])
-        n_samples = in_file.getNSamples()
-        npts_win = win_dur * fs
-
-        nwin = np.ceil((n_samples - npts_win) * ovlp)
-        windows = pt_grp.create_dataset('signal', data=np.zeros(nwin, npts_win, n_chan))
-        for start in range(0, n_samples, npts_win * ovlp):
-            for j in range(n_chan):
-                windows[i, :, j] = in_file.readSignal(chan_idx[j], start=start, n=npts_win)
-        np.save(pt_name + '_windows', windows[:])
-    return f
-
-
-
-
-def extract_windows(sigfiles, detfiles, ovlp=0.5, win_dur=4.0, fname='windows.h5', lbl_type='intersect'):
-    # Get paths and filenames from conf
-    if os.path.exists(fname):
-        print("File exists. Provide new name or remove existing file: " + fname + '\n')
-        exit()
-
-    outFile = h5py.File(fname, 'w')
-
-    nwin = 0
-    pts_in_win = 0
-    for i in range(len(sigfiles)):
-        inFile = pyedflib.EdfReader(sigfiles[i])
-        dur = inFile.getFileDuration()
-        fs = 256
-        n_pts = int(dur * fs)
-
-        pts_in_win = int(win_dur * fs)
-        nwin += n_pts / (pts_in_win * ovlp)
-
-    ds = outFile.create_dataset('windows', data=np.zeros([nwin, 19, pts_in_win]))
-    labels = outFile.create_dataset('labels', data=np.zeros(nwin))
-    count = 0
-    for i in range(len(sigfiles)):
-        print('On example #' + str(i + 1))
-        inFile = pyedflib.EdfReader(sigfiles[i])
-        chan_list = [['Fp1', re.compile('EEG Fp1-CLE')],
-                     ['Fp2', re.compile('EEG Fp2-CLE')],
-                     ['F7', re.compile('EEG F7-CLE')],
-                     ['F3', re.compile('EEG F3-CLE')],
-                     ['Fpz', re.compile('EEG Fpz-CLE')],
-                     ['F4', re.compile('EEG F4-CLE')],
-                     ['F8', re.compile('EEG F8-CLE')],
-                     ['T3', re.compile('EEG T3-CLE')],
-                     ['C3', re.compile('EEG C3-CLE')],
-                     ['Cz', re.compile('EEG Cz-CLE')],
-                     ['C4', re.compile('EEG C4-CLE')],
-                     ['T4', re.compile('EEG T4-CLE')],
-                     ['T5', re.compile('EEG T5-CLE')],
-                     ['P3', re.compile('EEG P3-CLE')],
-                     ['Pz', re.compile('EEG *[Pp]z-CLE')],
-                     ['P4', re.compile('EEG P4-CLE')],
-                     ['T6', re.compile('EEG T6-CLE')],
-                     ['O1', re.compile('EEG O1-CLE')],
-                     ['O2', re.compile('EEG O2-CLE')],
-                     ['A2', re.compile('EEG A.-CLE')]]
-        ch_idx = np.zeros(len(chan_list) - 1, dtype=int)
-        all_chan = inFile.getSignalLabels()
-        for j in range(len(chan_list) - 1):
-            ch_idx[j] = [x for x in range(len(all_chan)) if chan_list[j][1].match(all_chan[x])][0]
-        comp_idx = [x for x in range(len(all_chan)) if chan_list[-1][1].match(all_chan[x])][0]
-        fs = int(inFile.getSignalHeader(ch_idx[0])['sample_rate'])
-        dur = inFile.getFileDuration()
-        n_pts = int(dur * fs)
-        t = np.linspace(0, inFile.getFileDuration())
-        step_size = int(ovlp * pts_in_win)
-        n_win = int((n_pts - pts_in_win) / step_size)
-
-        spindles = np.zeros(n_pts)
-        if lbl_type == 'single':
-            df = pyedflib.EdfReader(detfiles[i])
-            annot = df.readAnnotations()
-            for j in range(len(annot[0])):
-                if annot[1][j] > 10:
-                    continue
-                start = int(annot[0][j] * fs)
-                stop = start + int(annot[1][j] * fs)
-                spindles[start:stop] = 1
+    for edf_fname in edf_files:
+        print('\n\nProcessing %s' % edf_fname)
+        in_file = None
+        pt_name = edf_fname.split('/')[-1].split('.')[0]
+        h5_f = h5py.File(base_path + pt_name + '.h5', 'w')
+        if 'windows' in list(h5_f):
+            windows = h5_f['windows']
         else:
-            n_files = len(detfiles[i])
-            sig_len = inFile.getFileDuration() * fs
-            mask = np.zeros((n_files, sig_len), dtype=bool)
-            tstarts = []
-            for j in range(n_files):
-                df = pyedflib.EdfReader(detfiles[i][j])
-                annot = df.readAnnotations()
-                for k in range(len(annot[0])):
-                    if annot[1][i] > 10:
-                        continue
-                    start = int(annot[0][k] * fs)
-                    tstarts.append(annot[0][k])
-                    stop = int(start + annot[1][k] * fs)
-                    mask[j, start:stop] = 1
-            if n_files == 1:
-                spindles = mask
-            elif lbl_type == 'intersect':
-                spindles = mask[0, :]
-                for j in range(1, n_files):
-                    spindles = np.logical_and(spindles, mask[j, :])
-            elif lbl_type == 'union':
-                spindles = mask[0, :]
-                for j in range(1, n_files):
-                    spindles = np.logical_or(spindles, mask[j, :])
+            in_file = pyedflib.EdfReader(edf_fname)
+            windows = extract_windows(h5_f, in_file, params)
+            h5_f.close()
+            h5_f = h5py.File(base_path + pt_name + '.h5', 'r+')
 
-        for i in range(n_win):
-            tstart = i * step_size
-            comp = inFile.readSignal(comp_idx, tstart, pts_in_win)
-            for ch in range(len(ch_idx)):
-                ds[count, ch, :] = inFile.readSignal(ch_idx[ch], tstart, pts_in_win) - comp
-            if np.any(spindles[tstart:tstart + pts_in_win]):
-                if spindles[tstart - 1] == 0 and spindles[idx + pts_in_win + 1] == 0:
-                    labels[count] = 2
-                else:
-                    labels[count] = 1
-            count += 1
+        if 'bandpass' in list(h5_f):
+            bp = h5_f['bandpass']
+        else:
+            (fstop1, fstop2) = params['bandpass']
+            bp = bandpass_signals(h5_f, windows, fs=params['sample_rate'], fstop1=fstop1, fstop2=fstop2,
+                                       channel_names=channel_names)
+            h5_f.close()
+            h5_f = h5py.File(base_path + pt_name + '.h5', 'r+')
+
+        if 'spectrograms' in list(h5_f):
+            specs = h5_f['spectrograms']
+        else:
+            specs = generate_spectrograms(h5_f, bp, params)
+            h5_f.close()
+            h5_f = h5py.File(base_path + pt_name + '.h5', 'r+')
+
+        h5_f.close()
+
+def extract_edf_data(edf_files, params, annotations=None, base_path='', name_func=None):
+    if not os.path.exists(base_path):
+        os.mkdir(base_path)
+
+    for i in range(len(edf_files)):
+        edf_fname = edf_files[i]
+        print('\n\nProcessing %s' % edf_fname)
+        in_file = None
+        pt_name = edf_fname.split('/')[-1].split('.')[0] + '_test'
+        if annotations is not None:
+            annot = annotations[i]
+        else:
+            annot = None
+
+        if os.path.isfile(base_path + pt_name + '.h5'):
+            h5_f = h5py.File(base_path + pt_name + '.h5', 'r+')
+        else:
+            h5_f = h5py.File(base_path + pt_name + '.h5', 'w')
+        if 'windows' in list(h5_f):
+            windows = h5_f['windows']
+        else:
+            in_file = pyedflib.EdfReader(edf_fname)
+            if annotations is None:
+                windows = extract_windows(h5_f, in_file, params, annotations=annot, name_func=name_func)
+            else:
+                windows, spindle_mask = extract_windows(h5_f, in_file, params, annotations=annot, name_func=name_func)
+            h5_f.close()
+            h5_f = h5py.File(base_path + pt_name + '.h5', 'r+')
+            windows = h5_f['windows']
+
+        if 'bandpass' in list(h5_f):
+            bp = h5_f['bandpass']
+        else:
+            (fstop1, fstop2) = params['bandpass']
+            bp = bandpass_signals(h5_f, windows, fstop1=fstop1, fstop2=fstop2)
+            h5_f.close()
+            h5_f = h5py.File(base_path + pt_name + '.h5', 'r+')
+            bp = h5_f['bandpass']
+
+        if 'spectrograms' in list(h5_f):
+            specs = h5_f['spectrograms']
+        else:
+            specs = generate_spectrograms(h5_f, bp, params)
+            h5_f.close()
+            h5_f = h5py.File(base_path + pt_name + '.h5', 'r+')
+            specs = h5_f['spectrograms']
+
+        f_crop = params['f_crop']
+        crop_name = 'spectrograms_c%d-%d' % (f_crop[0], f_crop[1])
+        if crop_name in list(h5_f):
+            cropped = h5_f[crop_name]
+        else:
+            cropped = crop_specs(specs, f_crop, crop_name)
+        h5_f.close()
+
+
+def extract_windows(h5_f, in_file, params, annotations=None, name_func=None):
+    win_dur = params['window_duration']
+    ovlp = params['overlap']
+    channel_names = in_file.getSignalLabels()
+    eeg_channels_idx = [i for i in range(len(channel_names)) if 'EEG' in channel_names[i]]
+    n_chan_eeg = len(eeg_channels_idx)
+
+    eeg_channel_names = np.array([channel_names[x] for x in eeg_channels_idx], dtype=str)
+    if name_func is not None:
+        long_names = eeg_channel_names
+        eeg_channel_names = []
+        for i in range(len(long_names)):
+            eeg_channel_names.append(name_func(long_names[i]))
+    eeg_channel_names = np.array(eeg_channel_names, dtype=str)
+
+    fs = in_file.getSampleFrequency(eeg_channels_idx[0])
+    n_samples = int(in_file.getNSamples()[0])
+    npts_win = int(win_dur * fs)
+    step = int(npts_win * (1 - ovlp))
+    # nwin = int(np.ceil((n_samples - npts_win) / step))
+    nwin = len(range(0, n_samples, step))
+
+    if annotations is not None:
+        print('Getting mask for annotated spindles...')
+        spindle_masks = h5_f.create_dataset('spindle_mask', shape=(nwin, npts_win), dtype=int)
+        n_files = len(annotations)
+        mask = np.zeros((n_files, n_samples), dtype=bool)
+        tstarts = []
+        for i in range(n_files):
+            df = pyedflib.EdfReader(annotations[i])
+            annot = df.readAnnotations()
+            for k in range(len(annot[0])):
+                if annot[1][i] > 10:
+                    continue
+                start = int(annot[0][k] * fs)
+                tstarts.append(annot[0][k])
+                stop = int(start + annot[1][k] * fs)
+                mask[i, start:stop] = 1
+        spindles = mask[0, :]
+        for i in range(1, n_files):
+            spindles = np.logical_and(spindles, mask[i, :])
+
+        spindles = spindles.astype(int)
+
+        # count spindles
+        cur = 1
+        z = True
+        for i in range(len(spindles)):
+            if spindles[i] == 0 and not z:
+                z = True
+                cur += 1
+            elif spindles[i] > 0:
+                spindles[i] = cur
+                z = False
+
+    if 'reference' in list(params):
+        windows = h5_f.create_dataset('raw', shape=(n_chan_eeg, nwin, npts_win))
+    else:
+        windows = h5_f.create_dataset('windows', shape=(n_chan_eeg, nwin, npts_win))
+
+    print('\nDuration:%.2f minutes\t\tSample rate:%d\t# EEG Channels:%d' % (in_file.getFileDuration() / 60, fs, n_chan_eeg))
+    print('Extracting raw signal windows...')
+    for i in range(n_chan_eeg):
+        idx = 0
+        for start in tqdm(range(0, n_samples, step), desc='%s' % eeg_channel_names[i]):
+            if start > n_samples - npts_win:
+                npts = n_samples - start
+                windows[i, idx, :npts] = in_file.readSignal(eeg_channels_idx[i], start=start, n=npts)
+                if annotations is not None:
+                    spindle_masks[idx, :npts] = spindles[start:start+npts]
+            else:
+                windows[i, idx, :] = in_file.readSignal(eeg_channels_idx[i], start=start, n=npts_win)
+                if annotations is not None:
+                    spindle_masks[idx, :] = spindles[start:start+npts_win]
+            idx += 1
+    windows.attrs.create('channel_names', data=eeg_channel_names)
+    windows.attrs.create('sample_rate', data=fs)
+    print('All windows extracted')
+    if 'reference' in list(params):
+        print('Subtracting reference channels: %s' % '/'.join(['%s' % x for x in params['reference']]))
+        raw = windows
+        refs = params['reference']
+        n_ref = 0
+        ref_idx = None
+        for i in range(n_chan_eeg):
+            for j in range(len(refs)):
+                if refs[j] in eeg_channel_names[i]:
+                    if ref_idx is None:
+                        ref_idx = i
+                        ref_name = refs[j]
+                    n_ref += 1
+        windows = h5_f.create_dataset('windows', shape=(n_chan_eeg - n_ref, nwin, npts_win))
+
+        ct = 0
+        out_names = []
+        for i in range(n_chan_eeg):
+            skip = False
+            for j in range(len(refs)):
+                if refs[j] in eeg_channel_names[i]:
+                    skip = True
+            if skip:
+                continue
+            out_names.append(eeg_channel_names[i] + '-%s' % ref_name)
+            windows[ct, :, :] = raw[i, :, :][:] - raw[ref_idx, :, :][:]
+            ct += 1
+        out_names = np.array(out_names, dtype=str)
+        windows.attrs.create('channel_names', data=out_names)
+        windows.attrs.create('sample_rate', data=fs)
+    if annotations is not None:
+        return windows, spindle_masks
+    else:
+        return windows
+
+
+def bandpass_signals(h5_f, ds, fstop1, fstop2):
+    bp_ds = h5_f.create_dataset('bandpass', shape=ds.shape, dtype=float)
+    channel_names = ds.attrs.get('channel_names')
+    fs = ds.attrs.get('sample_rate')
+    print('Bandpassing %s' % ds.name)
+    print('Fstop1:%.2f\tFstop2:%.2f' % (fstop1, fstop2))
+    for i in range(ds.shape[0]):
+        for j in tqdm(range(ds.shape[1]), desc='Channel %s' % channel_names[i]):
+            bp_ds[i, j, :] = butter_bandpass_filter(ds[i, j, :], fstop1, fstop2, fs)
+    bp_ds.attrs.create('sample_rate', data=fs)
+    bp_ds.attrs.create('channel_names', data=channel_names)
+    return bp_ds
+
+
+def generate_spectrograms(h5_f, windows, params):
+    print('Generating spectrograms using: %s' % windows.name)
+    channel_names = windows.attrs.get('channel_names')
+    n_windows = windows.shape[1]
+    n_chan = windows.shape[0]
+    fs = windows.attrs.get('sample_rate')
+    nfft = int(params['nfft'])
+    npts_win = int(params['spec_window'] * fs)
+    n_ovlp = int(params['spec_overlap'] * fs)
+    fq_ref, t_ref, ex = signal.spectrogram(windows[0, 0, :], fs=fs, window=signal.windows.hamming(npts_win),
+                                           noverlap=n_ovlp, nfft=nfft, detrend=None)
+    (n_cols, n_rows) = ex.shape
+    print('Parameters:')
+    print('Nfft:%d\tWindow Size:%d\tN_overlap:%d' % (nfft, npts_win, n_ovlp))
+    print('Height (fq)\tvs.\tWidth (t)')
+    print('%d\t\t\t%d' % (ex.shape[0], ex.shape[1]))
+    specs = h5_f.create_dataset('spectrograms', shape=(n_chan, n_windows, n_cols, n_rows))
+    for i in range(n_chan):
+        for j in tqdm(range(n_windows), desc='Channel %s' % channel_names[i]):
+            _, _, specs[i, j, :, :] = signal.spectrogram(windows[i, j, :], fs=fs, window=signal.windows.hamming(npts_win),
+                                                         noverlap=n_ovlp, nfft=nfft, detrend=None)
+    specs.attrs.create('time', data=t_ref)
+    specs.attrs.create('frequency', data=fq_ref)
+    return specs
+
+
+def crop_specs(specs, nf_range, ds_name, of_range=None):
+    if of_range is not None:
+        n_fq = specs.shape[2]
+        o_fq = np.linspace(of_range[0], of_range[1], n_fq)
+    else:
+        o_fq = specs.attrs.get('frequency')
+    sel = np.intersect1d(np.where(o_fq >= nf_range[0])[0], np.where(o_fq <= nf_range[1])[0])
+    f = specs.parent
+    print('Original frequency range(%d points):\t%.3fHz - %.3fHz' % (len(o_fq), o_fq[0], o_fq[-1]))
+    print('New frequency range(%d points):\t%.3fHz - %.3fHz' % (len(sel), o_fq[sel[0]], o_fq[sel[-1]]))
+    ds = f.create_dataset(ds_name, data=specs[:, :, sel, :])
     return ds
 
 
-def bandpass_signals(ds, fstop1, fstop2):
-    f = ds.parent
-    bp_ds = f.create_dataset(ds.name.split('/')[-1] + '_bp', shape=ds.shape, dtype=float)
-    fs = ds.attrs.get('fs')
-    for i in range(ds.shape[0]):
-        for j in range(ds.shape[1]):
-            bp_ds[i, j, :] = butter_bandpass_filter(ds[i, j, :], fstop1, fstop2, fs)
-    return bp_ds
+def label_spindles_windows(windows, spindle_masks, spindle_labels, ds_name='spindle_labels'):
+    f = windows.parent
+    labels = f.create_dataset(ds_name, data=np.zeros(len(windows), dtype=int), dtype=int)
+    label_names = np.unique(spindle_labels)
+    label_dic = {}
+    for i in range(len(label_names)):
+        label_dic[label_names[i]] = i + 1
+    for i in range(len(windows)):
+        if spindle_masks[i, 0] > 0 or spindle_masks[i, -1] > 0:
+            spindle_index = int(np.max(spindle_masks[i, :])) - 1
+            labels[i] = -label_dic[spindle_labels[spindle_index]]
+        elif np.any(spindle_masks[i, :] > 0):
+            spindle_index = int(np.max(spindle_masks[i, :])) - 1
+            labels[i] = label_dic[spindle_labels[spindle_index]]
+    return labels
+
+
+
+# def extract_windows(sigfiles, detfiles, ovlp=0.5, win_dur=4.0, fname='windows.h5', lbl_type='intersect'):
+#     # Get paths and filenames from conf
+#     if os.path.exists(fname):
+#         print("File exists. Provide new name or remove existing file: " + fname + '\n')
+#         exit()
+#
+#     outFile = h5py.File(fname, 'w')
+#
+#     nwin = 0
+#     pts_in_win = 0
+#     for i in range(len(sigfiles)):
+#         inFile = pyedflib.EdfReader(sigfiles[i])
+#         dur = inFile.getFileDuration()
+#         fs = 256
+#         n_pts = int(dur * fs)
+#
+#         pts_in_win = int(win_dur * fs)
+#         nwin += n_pts / (pts_in_win * ovlp)
+#
+#     ds = outFile.create_dataset('windows', data=np.zeros([nwin, 19, pts_in_win]))
+#     labels = outFile.create_dataset('labels', data=np.zeros(nwin))
+#     count = 0
+#     for i in range(len(sigfiles)):
+#         print('On example #' + str(i + 1))
+#         inFile = pyedflib.EdfReader(sigfiles[i])
+#         chan_list = [['Fp1', re.compile('EEG Fp1-CLE')],
+#                      ['Fp2', re.compile('EEG Fp2-CLE')],
+#                      ['F7', re.compile('EEG F7-CLE')],
+#                      ['F3', re.compile('EEG F3-CLE')],
+#                      ['Fpz', re.compile('EEG Fpz-CLE')],
+#                      ['F4', re.compile('EEG F4-CLE')],
+#                      ['F8', re.compile('EEG F8-CLE')],
+#                      ['T3', re.compile('EEG T3-CLE')],
+#                      ['C3', re.compile('EEG C3-CLE')],
+#                      ['Cz', re.compile('EEG Cz-CLE')],
+#                      ['C4', re.compile('EEG C4-CLE')],
+#                      ['T4', re.compile('EEG T4-CLE')],
+#                      ['T5', re.compile('EEG T5-CLE')],
+#                      ['P3', re.compile('EEG P3-CLE')],
+#                      ['Pz', re.compile('EEG *[Pp]z-CLE')],
+#                      ['P4', re.compile('EEG P4-CLE')],
+#                      ['T6', re.compile('EEG T6-CLE')],
+#                      ['O1', re.compile('EEG O1-CLE')],
+#                      ['O2', re.compile('EEG O2-CLE')],
+#                      ['A2', re.compile('EEG A.-CLE')]]
+#         ch_idx = np.zeros(len(chan_list) - 1, dtype=int)
+#         all_chan = inFile.getSignalLabels()
+#         for j in range(len(chan_list) - 1):
+#             ch_idx[j] = [x for x in range(len(all_chan)) if chan_list[j][1].match(all_chan[x])][0]
+#         comp_idx = [x for x in range(len(all_chan)) if chan_list[-1][1].match(all_chan[x])][0]
+#         fs = int(inFile.getSignalHeader(ch_idx[0])['sample_rate'])
+#         dur = inFile.getFileDuration()
+#         n_pts = int(dur * fs)
+#         t = np.linspace(0, inFile.getFileDuration())
+#         step_size = int(ovlp * pts_in_win)
+#         n_win = int((n_pts - pts_in_win) / step_size)
+#
+#         spindles = np.zeros(n_pts)
+#         if lbl_type == 'single':
+#             df = pyedflib.EdfReader(detfiles[i])
+#             annot = df.readAnnotations()
+#             for j in range(len(annot[0])):
+#                 if annot[1][j] > 10:
+#                     continue
+#                 start = int(annot[0][j] * fs)
+#                 stop = start + int(annot[1][j] * fs)
+#                 spindles[start:stop] = 1
+#         else:
+#             n_files = len(detfiles[i])
+#             sig_len = inFile.getFileDuration() * fs
+#             mask = np.zeros((n_files, sig_len), dtype=bool)
+#             tstarts = []
+#             for j in range(n_files):
+#                 df = pyedflib.EdfReader(detfiles[i][j])
+#                 annot = df.readAnnotations()
+#                 for k in range(len(annot[0])):
+#                     if annot[1][i] > 10:
+#                         continue
+#                     start = int(annot[0][k] * fs)
+#                     tstarts.append(annot[0][k])
+#                     stop = int(start + annot[1][k] * fs)
+#                     mask[j, start:stop] = 1
+#             if n_files == 1:
+#                 spindles = mask
+#             elif lbl_type == 'intersect':
+#                 spindles = mask[0, :]
+#                 for j in range(1, n_files):
+#                     spindles = np.logical_and(spindles, mask[j, :])
+#             elif lbl_type == 'union':
+#                 spindles = mask[0, :]
+#                 for j in range(1, n_files):
+#                     spindles = np.logical_or(spindles, mask[j, :])
+#
+#         for i in range(n_win):
+#             tstart = i * step_size
+#             comp = inFile.readSignal(comp_idx, tstart, pts_in_win)
+#             for ch in range(len(ch_idx)):
+#                 ds[count, ch, :] = inFile.readSignal(ch_idx[ch], tstart, pts_in_win) - comp
+#             if np.any(spindles[tstart:tstart + pts_in_win]):
+#                 if spindles[tstart - 1] == 0 and spindles[idx + pts_in_win + 1] == 0:
+#                     labels[count] = 2
+#                 else:
+#                     labels[count] = 1
+#             count += 1
+#     return ds
+
 
 
 # %%
@@ -317,15 +552,6 @@ def fft_fe(ds, nfft, ham_win, f_crop=(7, 42), ds_name='spectrograms'):
                                             noverlap=step, nfft=nfft, detrend=None)
             specs[i, ch, :, :] = sxx[keep, :]
     return specs
-
-
-def crop_specs(specs, of_range, nf_range, ds_name):
-    n_fq = specs.shape[2]
-    o_fq = np.linspace(of_range[0], of_range[1], n_fq)
-    sel = np.intersect1d(np.where(o_fq >= nf_range[0])[0], np.where(o_fq <= nf_range[1])[0])
-    f = specs.parent
-    ds = f.create_dataset(ds_name, data=specs[:, :, sel, :])
-    return ds
 
 
 def square_pad(specs):
@@ -482,13 +708,38 @@ def find_peak(vec, op=np.greater):
 
 
 # %%
+# def normalize(inds, scale=2, v=False):
+#     print('Normalizing extracted features')
+#     f = inds.parent
+#     nchan = inds.shape[1]
+#     base_name = str(inds.name)
+#
+#     norm = f.create_dataset(base_name + '_norm', shape=inds.shape, dtype=float)
+#     for i in range(nchan):
+#         print('Normalizing channel ' + str(i + 1) + ' of ' + str(nchan))
+#         mean = np.mean(inds[:, i, :, :])
+#         std = np.std(inds[:, i, :, :])
+#         maxim = mean + scale * std
+#         minim = mean - scale * std
+#         if minim < 0:
+#             minim = 0
+#         norm[:, i, :, :] = np.clip((inds[:, i, :, :] - minim) / (maxim - minim), a_min=0.0, a_max=1.0)
+#     if v:
+#         plt.figure()
+#         plt.hist(norm[i, :, :, :].flatten(), bins=30, range=(0, 1))
+#         plt.xlabel('Amplitude')
+#         plt.ylabel('Frequency')
+#         plt.title('Channel ' + str(ch_names[i]) + ' Spectrogram Amplitude Distribution')
+#         plt.xlim(0, 1)
+#         plt.savefig('spec_hist_norm_ch' + str(ch_names[i]) + '.pdf')
+#         plt.clf()
+#     return norm
+
 def normalize(inds, scale=2, v=False):
     print('Normalizing extracted features')
-    f = inds.parent
-    nchan = inds.shape[1]
-    base_name = str(inds.name)
+    nchan = inds.shape[-1]
 
-    norm = f.create_dataset(base_name + '_norm', shape=inds.shape, dtype=float)
+    norm = np.zeros(inds.shape, dtype=float)
     for i in range(nchan):
         print('Normalizing channel ' + str(i + 1) + ' of ' + str(nchan))
         mean = np.mean(inds[:, i, :, :])

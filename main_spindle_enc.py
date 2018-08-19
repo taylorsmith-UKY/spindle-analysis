@@ -85,7 +85,7 @@ except:
 
 # ppf.spindle_stats(specs, f_range=f_crop)
 os.environ["CUDA_VISIBLE_DEVICES"] = gpu_id
-vae, vae_loss = sae.get_conv_vae(ds.shape[1:])
+vae, vae_loss = sae.get_conv_vae(ds.shape[1:])  # returns a compiled Keras model, along with custom loss function
 rds = HDF5Matrix(dataFile, ds_name)
 model_checkpoint = ModelCheckpoint(vae_name, monitor='loss', verbose=1, save_best_only=True)
 history = vae.fit(rds, rds, batch_size=batch_size, epochs=n_epochs, verbose=1, validation_split=0.2,
